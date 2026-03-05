@@ -81,7 +81,7 @@ it('can access enrolled courses via belongsToMany', function () {
 
 it('can have comments', function () {
     $user = User::factory()->create();
-    $lesson = \App\Models\Lesson::factory()->create();
+    $ = \App\Models\Lesson::factory()->create();
 
     Comment::factory()->create([
         'user_id' => $user->id,
@@ -624,7 +624,7 @@ class Lesson extends Model
      */
     public function loadComments(): self
     {
-        return $this->load(['comments' => fn ($query) => $query->oldest()->with('user:id,name')]);
+        return $this->load(['comments' => fn ($query) => $query->oldest()->with('user:id,name,role')]);
     }
 }
 ```
