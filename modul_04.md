@@ -512,6 +512,21 @@ it('requires authentication to enroll', function () {
 
 ## 🟢 Fase GREEN: Service Pattern + Controller
 
+
+### Routes
+
+Tambahkan di `routes/web.php`, di dalam group `auth` yang sudah ada:
+
+```php
+use App\Http\Controllers\EnrollmentController;
+
+// Enrollment — harus login (middleware auth)
+// {course:slug} = route model binding via kolom slug
+Route::post('/courses/{course:slug}/enroll', [EnrollmentController::class, 'store'])
+    ->middleware('auth')
+    ->name('courses.enroll');
+```
+
 ### Service Class (Business Logic)
 
 Buat folder dan file: `app/Services/EnrollUserInCourseService.php`:
@@ -616,21 +631,6 @@ class EnrollmentController extends Controller
 }
 
 ```
-
-### Routes
-
-Tambahkan di `routes/web.php`, di dalam group `auth` yang sudah ada:
-
-```php
-use App\Http\Controllers\EnrollmentController;
-
-// Enrollment — harus login (middleware auth)
-// {course:slug} = route model binding via kolom slug
-Route::post('/courses/{course:slug}/enroll', [EnrollmentController::class, 'store'])
-    ->middleware('auth')
-    ->name('courses.enroll');
-```
-
 ### Share Flash Data ke Frontend
 
 Buka `app/Http/Middleware/HandleInertiaRequests.php`:
@@ -773,7 +773,91 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
 > **Catatan**: Struktur `app-layout.tsx` bisa bervariasi antar versi starter kit. Prinsipnya: letakkan `<FlashMessage />` di dalam layout, **sebelum** `{children}`.
 
-### 3. Dashboard Controller
+
+### 5. Tambahkan Dashboard Test Jika Belum Ada
+
+```bash
+php artisan make:test --pest DashboardTest
+```
+
+`tests/Feature/DashboardTest.php`:
+
+```php
+<?php
+
+use App\Models\Course;
+use App\Models\Enrollment;
+use App\Models\User;
+use Inertia\Testing\AssertableInertia;
+
+// Tambahkan test berikut
+
+it('shows enrolled courses on dashboard', function () {
+    $student = User::factory()->create(['role' => 'student']);
+    $course = Course::factory()->published()->create();
+    Enrollment::factory()->create([
+        'user_id' => $student->id,
+        'course_id' => $course->id,
+    ]);
+
+    $this->actingAs($student)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertInertia(
+            fn (AssertableInertia $page) => $page
+                ->component('dashboard')
+                ->has('enrolledCourses.data', 1)
+        );
+});
+
+it('shows teaching courses for instructor', function () {
+    $instructor = User::factory()->create(['role' => 'instructor']);
+    Course::factory()->count(2)->create([
+        'instructor_id' => $instructor->id,
+    ]);
+
+    $this->actingAs($instructor)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertInertia(
+            fn (AssertableInertia $page) => $page
+                ->component('dashboard')
+                ->has('teachingCourses.data', 2)
+        );
+});
+
+it('shows empty state when no enrollments', function () {
+    $student = User::factory()->create(['role' => 'student']);
+
+    $this->actingAs($student)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertInertia(
+            fn (AssertableInertia $page) => $page
+                ->has('enrolledCourses.data', 0)
+        );
+});
+```
+
+
+### 3. Update Route Dashboard
+
+Di `routes/web.php`, cari route `/dashboard` bawaan dan ganti:
+
+```php
+use App\Http\Controllers\DashboardController;
+
+// ❌ HAPUS route dashboard closure bawaan:
+// Route::inertia('dashboard', 'dashboard')->name('dashboard');
+
+// ✅ GANTI dengan Controller:
+Route::get('dashboard', [DashboardController::class, 'index'])
+    ->middleware(['auth', 'verified'])
+    ->name('dashboard');
+```
+
+
+### 4. Dashboard Controller
 
 ```bash
 php artisan make:controller DashboardController
@@ -801,15 +885,10 @@ class DashboardController extends Controller
         $user = $request->user();
 
         // Kursus yang di-enroll siswa (via relasi belongsToMany)
-        $enrolledCourses = $user->enrolledCourses()
-            ->with('instructor')
-            ->withCount('lessons')
-            ->get();
+        $enrolledCourses = $user->getEnrolledCourses();
 
         // Kursus yang diajar (jika user adalah instructor)
-        $teachingCourses = $user->courses()
-            ->withCount(['lessons', 'enrollments'])
-            ->get();
+        $teachingCourses = $user->getTeachingCourses();
 
         return Inertia::render('dashboard', [
             'enrolledCourses' => CourseResource::collection($enrolledCourses),
@@ -818,24 +897,7 @@ class DashboardController extends Controller
     }
 }
 ```
-
-### Update Route Dashboard
-
-Di `routes/web.php`, cari route `/dashboard` bawaan dan ganti:
-
-```php
-use App\Http\Controllers\DashboardController;
-
-// ❌ HAPUS route dashboard closure bawaan:
-// Route::inertia('dashboard', 'dashboard')->name('dashboard');
-
-// ✅ GANTI dengan Controller:
-Route::get('dashboard', [DashboardController::class, 'index'])
-    ->middleware(['auth', 'verified'])
-    ->name('dashboard');
-```
-
-### 4. Halaman Dashboard
+### 5. Halaman Dashboard
 
 Buka `resources/js/pages/dashboard.tsx` dan **ganti seluruh isinya**:
 
@@ -971,71 +1033,6 @@ export default function Dashboard({ enrolledCourses, teachingCourses }: Props) {
 }
 ```
 
-### 5. Tambahkan Dashboard Test Jika Belum Ada
-
-```bash
-php artisan make:test --pest DashboardTest
-```
-
-`tests/Feature/DashboardTest.php`:
-
-```php
-<?php
-
-use App\Models\Course;
-use App\Models\Enrollment;
-use App\Models\User;
-use Inertia\Testing\AssertableInertia;
-
-// Tambahkan test berikut
-
-it('shows enrolled courses on dashboard', function () {
-    $student = User::factory()->create(['role' => 'student']);
-    $course = Course::factory()->published()->create();
-    Enrollment::factory()->create([
-        'user_id' => $student->id,
-        'course_id' => $course->id,
-    ]);
-
-    $this->actingAs($student)
-        ->get('/dashboard')
-        ->assertOk()
-        ->assertInertia(
-            fn (AssertableInertia $page) => $page
-                ->component('dashboard')
-                ->has('enrolledCourses.data', 1)
-        );
-});
-
-it('shows teaching courses for instructor', function () {
-    $instructor = User::factory()->create(['role' => 'instructor']);
-    Course::factory()->count(2)->create([
-        'instructor_id' => $instructor->id,
-    ]);
-
-    $this->actingAs($instructor)
-        ->get('/dashboard')
-        ->assertOk()
-        ->assertInertia(
-            fn (AssertableInertia $page) => $page
-                ->component('dashboard')
-                ->has('teachingCourses.data', 2)
-        );
-});
-
-it('shows empty state when no enrollments', function () {
-    $student = User::factory()->create(['role' => 'student']);
-
-    $this->actingAs($student)
-        ->get('/dashboard')
-        ->assertOk()
-        ->assertInertia(
-            fn (AssertableInertia $page) => $page
-                ->has('enrolledCourses.data', 0)
-        );
-});
-```
-
 ---
 
 ## ✅ Checkpoint Modul 4
@@ -1051,7 +1048,7 @@ php artisan test
 # 3. Re-seed database (agar data konsisten)
 php artisan migrate:fresh --seed
 
-# 4. ESLint + TypeScript check
+# 4. ESLint + TypeScript check (optional)
 npx eslint resources/js/
 npx tsc --noEmit
 # Expected: tidak ada error
