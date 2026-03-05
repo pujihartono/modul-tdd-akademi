@@ -259,6 +259,68 @@ public function certificates(): \Illuminate\Database\Eloquent\Relations\HasMany
 {
     return $this->hasMany(\App\Models\Certificate::class);
 }
+
+/**
+ * Instruktur di kelas terkait
+ */
+public function instructedCourses(): HasMany
+{
+    return $this->hasMany(Course::class, 'instructor_id');
+}
+
+// -------------------------------------------------------------------------
+// Domain Methods
+// -------------------------------------------------------------------------
+
+/**
+ * Ambil kursus yang di-enroll beserta relasi yang dibutuhkan di dashboard.
+ * Query ini milik User, bukan tanggung jawab controller.
+ *
+ * @return Collection<int, Course>
+ */
+public function getEnrolledCourses(): Collection
+{
+    return $this->enrolledCourses()
+        ->with('instructor')
+        ->withCount('lessons')
+        ->get();
+}
+
+/**
+ * Ambil kursus yang diajar beserta statistik yang dibutuhkan di dashboard.
+ *
+ * @return Collection<int, Course>
+ */
+public function getTeachingCourses(): Collection
+{
+    return $this->instructedCourses()
+        ->withCount(['lessons', 'enrollments'])
+        ->get();
+}
+
+/**
+ * Ambil ID lesson yang sudah diselesaikan user di suatu kursus.
+ *
+ * @return array<int>
+ */
+public function completedLessonIdsForCourse(Course $course): array
+{
+    return $this->lessonCompletions()
+        ->whereIn('lesson_id', $course->lessons->pluck('id'))
+        ->pluck('lesson_id')
+        ->all();
+}
+
+/**
+ * Ambil sertifikat user untuk kursus tertentu.
+ * Null jika belum mendapat sertifikat.
+ */
+public function certificateFor(Course $course): ?Certificate
+{
+    return $this->certificates()
+        ->where('course_id', $course->id)
+        ->first();
+}
 ```
 
 Update `database/factories/UserFactory.php` — tambahkan `role`:
@@ -315,6 +377,9 @@ public function up(): void
 
 namespace App\Models;
 
+use Database\Factories\CourseFactory;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -322,6 +387,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Course extends Model
 {
+    /** @use HasFactory<CourseFactory> */
     use HasFactory;
 
     // Kolom yang boleh diisi via mass assignment (create/update)
@@ -363,6 +429,50 @@ class Course extends Model
     public function enrollments(): HasMany
     {
         return $this->hasMany(Enrollment::class);
+    }
+
+    public function certificates(): HasMany
+    {
+        return $this->hasMany(Certificate::class);
+    }
+
+    // -------------------------------------------------------------------------
+    // Local Scopes
+    // -------------------------------------------------------------------------
+
+    /**
+     * Hanya kursus yang sudah dipublish.
+     */
+    public function scopeWherePublished(Builder $query): void
+    {
+        $query->whereNotNull('published_at');
+    }
+
+    // -------------------------------------------------------------------------
+    // Static Query Methods
+    // -------------------------------------------------------------------------
+
+    /**
+     * Ambil daftar kursus published untuk halaman katalog.
+     * Query ini tidak mengandung business rule, hanya presentasi data.
+     */
+    public static function getPublished(int $perPage = 9): LengthAwarePaginator
+    {
+        return static::query()
+            ->with('instructor')
+            ->withCount('lessons')
+            ->wherePublished()
+            ->latest('published_at')
+            ->paginate($perPage);
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    public function isPublished(): bool
+    {
+        return $this->published_at !== null;
     }
 }
 ```
@@ -436,6 +546,7 @@ public function up(): void
         $table->string('title');                   // Judul lesson
         $table->string('video_url')->nullable();   // URL video (YouTube, Vimeo, dll)
         $table->longText('content')->nullable();   // Konten teks/artikel
+        $table->unsignedTinyInteger('order')->default(1);
         $table->timestamps();
     });
 }
@@ -448,6 +559,7 @@ public function up(): void
 
 namespace App\Models;
 
+use Database\Factories\LessonFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -455,9 +567,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Lesson extends Model
 {
+    /** @use HasFactory<LessonFactory> */
     use HasFactory;
 
-    protected $fillable = ['course_id', 'title', 'video_url', 'content'];
+    protected $fillable = ['course_id', 'title', 'video_url', 'content', 'order'];
 
     /** Kursus yang memiliki lesson ini. */
     public function course(): BelongsTo
@@ -470,6 +583,49 @@ class Lesson extends Model
     {
         return $this->hasMany(Comment::class);
     }
+
+    /** Lessom yang yang sudah selesai */
+    public function completions(): HasMany
+    {
+        return $this->hasMany(LessonCompletion::class);
+    }
+
+    // -------------------------------------------------------------------------
+    // Domain Methods
+    // -------------------------------------------------------------------------
+
+    /**
+     * Ambil lesson sebelumnya dalam kursus (berdasarkan order).
+     * Query ini berkaitan langsung dengan Lesson, tepat berada di model.
+     */
+    public function previousLesson(): ?self
+    {
+        return $this->course->lessons
+            ->sortBy('order')
+            ->values()
+            ->filter(fn (self $l) => $l->order < $this->order)
+            ->last();
+    }
+
+    /**
+     * Ambil lesson berikutnya dalam kursus (berdasarkan order).
+     */
+    public function nextLesson(): ?self
+    {
+        return $this->course->lessons
+            ->sortBy('order')
+            ->values()
+            ->filter(fn (self $l) => $l->order > $this->order)
+            ->first();
+    }
+
+    /**
+     * Load komentar lesson beserta relasi user-nya (untuk ditampilkan di halaman lesson).
+     */
+    public function loadComments(): self
+    {
+        return $this->load(['comments' => fn ($query) => $query->oldest()->with('user:id,name')]);
+    }
 }
 ```
 
@@ -481,17 +637,27 @@ class Lesson extends Model
 namespace Database\Factories;
 
 use App\Models\Course;
+use App\Models\Lesson;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
+/**
+ * @extends Factory<Lesson>
+ */
 class LessonFactory extends Factory
 {
+    /**
+     * Define the model's default state.
+     *
+     * @return array<string, mixed>
+     */
     public function definition(): array
     {
         return [
             'course_id' => Course::factory(), // Auto-buat Course jika tidak disediakan
             'title' => fake()->sentence(),
-            'video_url' => 'https://example.com/video/' . fake()->uuid(),
+            'video_url' => 'https://example.com/video/'.fake()->uuid(),
             'content' => fake()->paragraphs(3, true), // 3 paragraf digabung jadi string
+            'order' => $this->faker->numberBetween(1, 100),
         ];
     }
 }
@@ -744,6 +910,7 @@ public function up(): void
         $table->foreignId('course_id')->constrained()->cascadeOnDelete();
         // Nomor sertifikat unik, contoh: "ACAD-AB12CD34"
         $table->string('certificate_number')->unique();
+        $table->timestamp('issued_at')->default(now());
         $table->timestamps();
         // CONSTRAINT: satu sertifikat per user per course
         $table->unique(['user_id', 'course_id']);
@@ -758,15 +925,30 @@ public function up(): void
 
 namespace App\Models;
 
+use Database\Factories\CertificateFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Certificate extends Model
 {
+    /** @use HasFactory<CertificateFactory> */
     use HasFactory;
 
-    protected $fillable = ['user_id', 'course_id', 'certificate_number'];
+    protected $fillable = [
+        'user_id',
+        'course_id',
+        'certificate_number',
+        'issued_at',
+    ];
+
+    public function casts(): array
+    {
+        return [
+            'issued_at' => 'datetime',
+        ];
+    }
 
     public function user(): BelongsTo
     {
@@ -776,6 +958,22 @@ class Certificate extends Model
     public function course(): BelongsTo
     {
         return $this->belongsTo(Course::class);
+    }
+
+    /**
+     * Filter sertifikat berdasarkan user.
+     */
+    public function scopeForUser(Builder $query, int $userId): void
+    {
+        $query->where('user_id', $userId);
+    }
+
+    /**
+     * Filter sertifikat berdasarkan kursus.
+     */
+    public function scopeForCourse(Builder $query, int $courseId): void
+    {
+        $query->where('course_id', $courseId);
     }
 }
 ```
@@ -787,17 +985,29 @@ class Certificate extends Model
 
 namespace Database\Factories;
 
+use App\Models\Certificate;
+use App\Models\Course;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
+/**
+ * @extends Factory<Certificate>
+ */
 class CertificateFactory extends Factory
 {
+    /**
+     * Define the model's default state.
+     *
+     * @return array<string, mixed>
+     */
     public function definition(): array
     {
         return [
-            'user_id' => \App\Models\User::factory(),
-            'course_id' => \App\Models\Course::factory(),
-            'certificate_number' => 'ACAD-' . Str::upper(Str::random(8)),
+            'user_id' => User::factory(),
+            'course_id' => Course::factory(),
+            'certificate_number' => 'ACAD-'.Str::upper(Str::random(8)),
+            'issued_at' => now(),
         ];
     }
 }
@@ -831,6 +1041,9 @@ use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
 {
+    /**
+     * Seed the application's database.
+     */
     use WithoutModelEvents; // Nonaktifkan events saat seeding (lebih cepat)
 
     public function run(): void
@@ -874,24 +1087,28 @@ class DatabaseSeeder extends Seeder
             'title' => 'Introduction to Laravel 12',
             'video_url' => 'https://www.youtube.com/embed/dQw4w9WgXcQ',
             'content' => 'Overview of Laravel 12 features and what we will build.',
+            'order' => 1,
         ]);
         Lesson::create([
             'course_id' => $course1->id,
             'title' => 'Routing and Controllers',
             'video_url' => 'https://www.youtube.com/embed/dQw4w9WgXcQ',
             'content' => 'Deep dive into routing, named routes, and resource controllers.',
+            'order' => 2,
         ]);
         Lesson::create([
             'course_id' => $course2->id,
             'title' => 'React Fundamentals',
             'video_url' => 'https://www.youtube.com/embed/dQw4w9WgXcQ',
             'content' => 'JSX, components, props, and hooks.',
+            'order' => 1,
         ]);
         Lesson::create([
             'course_id' => $course2->id,
             'title' => 'Inertia.js Deep Dive',
             'video_url' => 'https://www.youtube.com/embed/dQw4w9WgXcQ',
             'content' => 'How Inertia bridges Laravel and React.',
+            'order' => 2,
         ]);
 
         // === 5. Enroll semua siswa ke kursus pertama ===
