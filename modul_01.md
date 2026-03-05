@@ -224,7 +224,842 @@ Berdasarkan fitur di atas, kita membutuhkan 6 entitas (tabel):
 
 > **Penting**: Setiap modul diakhiri dengan **Checkpoint** — serangkaian perintah dan verifikasi untuk memastikan semua kode berjalan sebelum lanjut ke modul berikutnya.
 
+---
 
+# Modul 00: Dasar PHP & React untuk Proyek Laravel + React Starter Kit
+
+> **Tujuan**: Memahami konsep PHP Dasar, PHP OOP, TypeScript, dan React sebagai fondasi sebelum masuk ke Laravel + React.
+>
+> **Untuk siapa**: Pemula yang baru belajar web development.
+>
+> **Catatan**: Modul ini adalah **pengantar ringkas** — fokus pada konsep yang paling sering dipakai, bukan semua fitur bahasa.
+
+---
+
+## Daftar Isi
+
+1. [PHP Dasar](#1-php-dasar)
+2. [PHP OOP (Object-Oriented Programming)](#2-php-oop)
+3. [TypeScript Dasar](#3-typescript-dasar)
+4. [React Dasar](#4-react-dasar)
+
+---
+
+## 1. PHP Dasar
+
+PHP adalah bahasa pemrograman yang berjalan di **server**. Laravel dibangun di atas PHP, jadi memahami PHP dasar adalah wajib.
+
+### 1.1 Variabel & Tipe Data
+
+Variabel PHP selalu diawali dengan tanda `$`. PHP bersifat *dynamically typed* — tipe data ditentukan otomatis.
+
+```php
+<?php
+
+$nama   = "Budi";           // string
+$umur   = 25;               // integer
+$tinggi = 170.5;            // float
+$aktif  = true;             // boolean
+$kosong = null;             // null
+
+echo "Halo, nama saya $nama dan umur saya $umur tahun.";
+// Output: Halo, nama saya Budi dan umur saya 25 tahun.
+```
+
+### 1.2 Array
+
+Array di PHP bisa berupa **list** (indexed) atau **map** (associative).
+
+```php
+<?php
+
+// Array indexed (seperti list)
+$buah = ["apel", "mangga", "jeruk"];
+echo $buah[0]; // apel
+
+// Array associative (seperti kamus/object)
+$user = [
+    "nama"  => "Siti",
+    "email" => "siti@email.com",
+    "umur"  => 22,
+];
+echo $user["nama"]; // Siti
+
+// Array of arrays (sering dipakai di Laravel untuk data koleksi)
+$siswa = [
+    ["nama" => "Ali",  "nilai" => 90],
+    ["nama" => "Budi", "nilai" => 85],
+];
+echo $siswa[1]["nama"]; // Budi
+```
+
+### 1.3 Kondisi (if / match)
+
+```php
+<?php
+
+$nilai = 75;
+
+// if - else
+if ($nilai >= 80) {
+    echo "Lulus dengan baik";
+} elseif ($nilai >= 60) {
+    echo "Lulus";
+} else {
+    echo "Tidak lulus";
+}
+
+// match (PHP 8+) — lebih ringkas dari switch
+$status = match(true) {
+    $nilai >= 80 => "A",
+    $nilai >= 60 => "B",
+    default      => "C",
+};
+echo $status; // B
+```
+
+### 1.4 Perulangan (Loop)
+
+```php
+<?php
+
+$angka = [1, 2, 3, 4, 5];
+
+// foreach — paling sering dipakai di Laravel (looping koleksi/array)
+foreach ($angka as $n) {
+    echo $n . " ";
+}
+// Output: 1 2 3 4 5
+
+// foreach dengan key (berguna untuk array associative)
+$produk = ["nama" => "Buku", "harga" => 25000];
+foreach ($produk as $key => $value) {
+    echo "$key: $value\n";
+}
+// nama: Buku
+// harga: 25000
+```
+
+### 1.5 Function
+
+```php
+<?php
+
+// Function biasa
+function sapa(string $nama): string
+{
+    return "Halo, $nama!";
+}
+
+echo sapa("Dewi"); // Halo, Dewi!
+
+// Arrow function (closure ringkas, sering dipakai di Laravel collection)
+$kali2 = fn($x) => $x * 2;
+echo $kali2(5); // 10
+
+// Default parameter
+function greet(string $nama, string $sapaan = "Halo"): string
+{
+    return "$sapaan, $nama!";
+}
+echo greet("Andi");           // Halo, Andi!
+echo greet("Andi", "Selamat datang"); // Selamat datang, Andi!
+```
+
+### 1.6 String Penting
+
+```php
+<?php
+
+$nama  = "  Laravel  ";
+$email = "user@example.com";
+
+// Fungsi string yang sering dipakai
+echo strtolower($nama);          // "  laravel  "
+echo strtoupper($nama);          // "  LARAVEL  "
+echo trim($nama);                // "Laravel"
+echo strlen(trim($nama));        // 7
+echo str_contains($email, "@");  // true (PHP 8+)
+echo str_replace("@", " [at] ", $email); // user [at] example.com
+
+// Heredoc — untuk string panjang/multiline
+$pesan = <<<EOT
+Halo $nama,
+Selamat datang di sistem kami.
+EOT;
+```
+
+---
+
+## 2. PHP OOP
+
+Laravel **sangat bergantung** pada OOP. Semua yang ada di Laravel — Controller, Model, Request, dll — adalah **class**.
+
+### 2.1 Class & Object
+
+```php
+<?php
+
+class Produk
+{
+    // Properties (variabel milik class)
+    public string $nama;
+    public int    $harga;
+
+    // Constructor — dijalankan saat object dibuat
+    public function __construct(string $nama, int $harga)
+    {
+        $this->nama  = $nama;
+        $this->harga = $harga;
+    }
+
+    // Method (fungsi milik class)
+    public function info(): string
+    {
+        return "{$this->nama} seharga Rp " . number_format($this->harga);
+    }
+}
+
+// Membuat object dari class
+$buku = new Produk("Buku Laravel", 85000);
+echo $buku->info(); // Buku Laravel seharga Rp 85.000
+```
+
+### 2.2 Visibility (public, protected, private)
+
+```php
+<?php
+
+class BankAccount
+{
+    public    string $pemilik;   // bisa diakses dari mana saja
+    protected float  $saldo;     // hanya dari class ini & turunannya
+    private   string $pin;       // hanya dari class ini saja
+
+    public function __construct(string $pemilik, float $saldo, string $pin)
+    {
+        $this->pemilik = $pemilik;
+        $this->saldo   = $saldo;
+        $this->pin     = $pin;
+    }
+
+    public function getSaldo(): float
+    {
+        return $this->saldo; // method publik untuk akses saldo
+    }
+}
+
+$akun = new BankAccount("Rini", 1000000, "1234");
+echo $akun->pemilik;    // Rini ✅
+echo $akun->getSaldo(); // 1000000 ✅
+// echo $akun->pin;     // ❌ Error! private
+```
+
+### 2.3 Inheritance (Pewarisan)
+
+Sebuah class bisa **mewarisi** properti dan method dari class lain. Di Laravel, Controller mewarisi `BaseController`, Model mewarisi `Eloquent\Model`, dll.
+
+```php
+<?php
+
+// Class induk
+class Hewan
+{
+    public string $nama;
+
+    public function __construct(string $nama)
+    {
+        $this->nama = $nama;
+    }
+
+    public function bernafas(): string
+    {
+        return "{$this->nama} sedang bernafas.";
+    }
+}
+
+// Class anak — mewarisi Hewan
+class Kucing extends Hewan
+{
+    public function bersuara(): string
+    {
+        return "{$this->nama} berkata: Meong!";
+    }
+}
+
+$kucingku = new Kucing("Mimi");
+echo $kucingku->bernafas(); // Mimi sedang bernafas. (dari Hewan)
+echo $kucingku->bersuara(); // Mimi berkata: Meong!  (milik Kucing)
+```
+
+### 2.4 Interface & Abstract Class
+
+**Interface** adalah kontrak: "class yang implement interface ini *wajib* punya method berikut."
+
+```php
+<?php
+
+// Interface — mendefinisikan "kontrak"
+interface Pembayaran
+{
+    public function bayar(int $jumlah): string;
+    public function refund(int $jumlah): string;
+}
+
+// Class yang mengimplementasi interface
+class Midtrans implements Pembayaran
+{
+    public function bayar(int $jumlah): string
+    {
+        return "Bayar Rp $jumlah via Midtrans berhasil.";
+    }
+
+    public function refund(int $jumlah): string
+    {
+        return "Refund Rp $jumlah via Midtrans berhasil.";
+    }
+}
+
+class Stripe implements Pembayaran
+{
+    public function bayar(int $jumlah): string
+    {
+        return "Pay \$$jumlah via Stripe success.";
+    }
+
+    public function refund(int $jumlah): string
+    {
+        return "Refund \$$jumlah via Stripe success.";
+    }
+}
+
+// Keduanya bisa dipakai secara seragam
+function prosesCheckout(Pembayaran $gateway, int $nominal): void
+{
+    echo $gateway->bayar($nominal) . "\n";
+}
+
+prosesCheckout(new Midtrans(), 150000);
+prosesCheckout(new Stripe(), 10);
+```
+
+### 2.5 Trait
+
+**Trait** adalah kumpulan method yang bisa "ditempelkan" ke banyak class tanpa inheritance. Laravel banyak menggunakan trait (contoh: `HasFactory`, `Notifiable`).
+
+```php
+<?php
+
+trait Timestampable
+{
+    public function createdAt(): string
+    {
+        return date("Y-m-d H:i:s");
+    }
+}
+
+trait SoftDeletable
+{
+    private bool $deleted = false;
+
+    public function delete(): void
+    {
+        $this->deleted = true;
+    }
+
+    public function isDeleted(): bool
+    {
+        return $this->deleted;
+    }
+}
+
+class Post
+{
+    use Timestampable, SoftDeletable; // pakai dua trait sekaligus
+
+    public string $judul;
+
+    public function __construct(string $judul)
+    {
+        $this->judul = $judul;
+    }
+}
+
+$post = new Post("Belajar Laravel");
+echo $post->createdAt();         // 2025-01-01 10:00:00
+echo $post->isDeleted() ? "terhapus" : "aktif"; // aktif
+$post->delete();
+echo $post->isDeleted() ? "terhapus" : "aktif"; // terhapus
+```
+
+### 2.6 Static Method & Property
+
+```php
+<?php
+
+class MathHelper
+{
+    // Konstanta — tidak berubah
+    const PI = 3.14159;
+
+    // Static property — dibagi semua instance
+    private static int $hitungPanggilan = 0;
+
+    // Static method — bisa dipanggil tanpa membuat object
+    public static function luasLingkaran(float $r): float
+    {
+        self::$hitungPanggilan++;
+        return self::PI * $r * $r;
+    }
+
+    public static function totalPanggilan(): int
+    {
+        return self::$hitungPanggilan;
+    }
+}
+
+echo MathHelper::luasLingkaran(7);  // 153.938...
+echo MathHelper::luasLingkaran(3);  // 28.274...
+echo MathHelper::totalPanggilan();  // 2
+```
+
+---
+
+## 3. TypeScript Dasar
+
+TypeScript adalah JavaScript dengan **tipe data**. Di proyek Laravel + React Starter Kit, semua kode frontend ditulis dalam TypeScript (`.ts` / `.tsx`).
+
+### 3.1 Tipe Data Dasar
+
+```typescript
+// Deklarasi variabel dengan tipe
+let nama: string  = "Budi";
+let umur: number  = 25;
+let aktif: boolean = true;
+
+// TypeScript akan error jika tipe tidak cocok
+// nama = 123; // ❌ Error: Type 'number' is not assignable to type 'string'
+
+// Union type — bisa lebih dari satu tipe
+let id: string | number = "abc123";
+id = 42; // ✅ boleh
+
+// Optional (bisa ada, bisa tidak)
+let nickname?: string;
+```
+
+### 3.2 Interface & Type
+
+Di TypeScript, `interface` dan `type` dipakai untuk mendefinisikan **bentuk sebuah object**.
+
+```typescript
+// Interface — untuk mendefinisikan struktur object
+interface User {
+    id: number;
+    name: string;
+    email: string;
+    role?: "admin" | "student" | "teacher"; // optional, hanya 3 nilai ini
+}
+
+// Pakai interface sebagai tipe
+const user: User = {
+    id: 1,
+    name: "Rina",
+    email: "rina@example.com",
+    role: "student",
+};
+
+// Type alias — mirip interface, lebih fleksibel untuk union
+type Status = "active" | "inactive" | "banned";
+type ID = string | number;
+
+// Type untuk object (sama seperti interface)
+type Kursus = {
+    id: ID;
+    judul: string;
+    status: Status;
+};
+```
+
+### 3.3 Function dengan TypeScript
+
+```typescript
+// Tipe parameter dan return value
+function tambah(a: number, b: number): number {
+    return a + b;
+}
+
+// Arrow function
+const sapa = (nama: string): string => `Halo, ${nama}!`;
+
+// Generic function — bekerja dengan berbagai tipe
+function getFirst<T>(arr: T[]): T | undefined {
+    return arr[0];
+}
+
+const angkaPertama = getFirst([10, 20, 30]); // type: number
+const namaPertama  = getFirst(["Ali", "Budi"]); // type: string
+```
+
+### 3.4 Array & Object Typing
+
+```typescript
+interface Produk {
+    nama: string;
+    harga: number;
+}
+
+// Array of interface
+const produk: Produk[] = [
+    { nama: "Buku",  harga: 50000 },
+    { nama: "Pensil", harga: 5000 },
+];
+
+// Map / Record
+const hargaPerItem: Record<string, number> = {
+    buku:   50000,
+    pensil: 5000,
+    penghapus: 3000,
+};
+
+// Destructuring dengan tipe (sering di React props)
+const { nama, harga }: Produk = produk[0];
+console.log(`${nama}: Rp ${harga}`); // Buku: Rp 50000
+```
+
+### 3.5 Tipe yang Sering Dipakai di Laravel + React
+
+```typescript
+// Tipe untuk Inertia.js Page Props (data dari Laravel Controller)
+interface PageProps {
+    auth: {
+        user: {
+            id: number;
+            name: string;
+            email: string;
+        };
+    };
+    flash?: {
+        message?: string;
+        error?: string;
+    };
+}
+
+// Tipe untuk form
+interface LoginForm {
+    email: string;
+    password: string;
+    remember: boolean;
+}
+
+// Nullable — bisa null
+interface Lesson {
+    id: number;
+    judul: string;
+    videoUrl: string | null; // bisa ada, bisa null
+    publishedAt: string | null;
+}
+```
+
+---
+
+## 4. React Dasar
+
+React adalah library JavaScript untuk membangun **antarmuka pengguna (UI)**. Di Laravel Starter Kit, React dipakai bersama **Inertia.js** sebagai layer frontend.
+
+### 4.1 Komponen
+
+Komponen adalah "blok bangunan" UI. Di React modern, komponen berupa **function** yang mengembalikan JSX.
+
+```tsx
+// Komponen paling sederhana
+function Halo() {
+    return <h1>Halo, Dunia!</h1>;
+}
+
+// Komponen dengan props (parameter dari luar)
+interface GreetingProps {
+    nama: string;
+    pesan?: string; // optional
+}
+
+function Greeting({ nama, pesan = "Selamat datang" }: GreetingProps) {
+    return (
+        <div>
+            <h2>{pesan}, {nama}!</h2>
+        </div>
+    );
+}
+
+// Pemakaian
+function App() {
+    return (
+        <div>
+            <Halo />
+            <Greeting nama="Budi" />
+            <Greeting nama="Siti" pesan="Halo" />
+        </div>
+    );
+}
+```
+
+### 4.2 useState — State / Data Lokal
+
+`useState` adalah Hook untuk menyimpan data yang bisa **berubah** dan memicu re-render UI.
+
+```tsx
+import { useState } from "react";
+
+function Counter() {
+    // [nilai saat ini, fungsi untuk ubah nilai]
+    const [count, setCount] = useState(0);
+
+    return (
+        <div>
+            <p>Hitungan: {count}</p>
+            <button onClick={() => setCount(count + 1)}>Tambah</button>
+            <button onClick={() => setCount(count - 1)}>Kurang</button>
+            <button onClick={() => setCount(0)}>Reset</button>
+        </div>
+    );
+}
+```
+
+```tsx
+// useState dengan object (contoh: form login)
+import { useState } from "react";
+
+interface LoginForm {
+    email: string;
+    password: string;
+}
+
+function LoginPage() {
+    const [form, setForm] = useState<LoginForm>({
+        email: "",
+        password: "",
+    });
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setForm({ ...form, [e.target.name]: e.target.value });
+    };
+
+    return (
+        <form>
+            <input
+                name="email"
+                type="email"
+                value={form.email}
+                onChange={handleChange}
+                placeholder="Email"
+            />
+            <input
+                name="password"
+                type="password"
+                value={form.password}
+                onChange={handleChange}
+                placeholder="Password"
+            />
+            <p>Email yang diketik: {form.email}</p>
+        </form>
+    );
+}
+```
+
+### 4.3 useEffect — Efek Samping
+
+`useEffect` dijalankan **setelah render**. Berguna untuk fetch data, subscribe event, dsb.
+
+```tsx
+import { useState, useEffect } from "react";
+
+interface Post {
+    id: number;
+    title: string;
+}
+
+function PostList() {
+    const [posts, setPosts] = useState<Post[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    // [] artinya hanya jalan sekali saat komponen pertama kali muncul
+    useEffect(() => {
+        fetch("https://jsonplaceholder.typicode.com/posts?_limit=5")
+            .then((res) => res.json())
+            .then((data: Post[]) => {
+                setPosts(data);
+                setLoading(false);
+            });
+    }, []);
+
+    if (loading) return <p>Memuat...</p>;
+
+    return (
+        <ul>
+            {posts.map((post) => (
+                <li key={post.id}>{post.title}</li>
+            ))}
+        </ul>
+    );
+}
+```
+
+### 4.4 Props & Komponen yang Dapat Digunakan Ulang
+
+```tsx
+// Komponen Button yang reusable
+interface ButtonProps {
+    label: string;
+    onClick: () => void;
+    variant?: "primary" | "danger" | "ghost";
+    disabled?: boolean;
+}
+
+function Button({ label, onClick, variant = "primary", disabled = false }: ButtonProps) {
+    const styles = {
+        primary: "bg-blue-600 text-white hover:bg-blue-700",
+        danger:  "bg-red-600 text-white hover:bg-red-700",
+        ghost:   "bg-transparent text-gray-700 hover:bg-gray-100",
+    };
+
+    return (
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={`px-4 py-2 rounded ${styles[variant]} disabled:opacity-50`}
+        >
+            {label}
+        </button>
+    );
+}
+
+// Pemakaian
+function FormPage() {
+    const handleSimpan = () => alert("Data disimpan!");
+    const handleHapus  = () => alert("Data dihapus!");
+
+    return (
+        <div className="flex gap-2">
+            <Button label="Simpan" onClick={handleSimpan} />
+            <Button label="Hapus"  onClick={handleHapus}  variant="danger" />
+            <Button label="Batal"  onClick={() => {}}     variant="ghost" />
+        </div>
+    );
+}
+```
+
+### 4.5 Conditional Rendering & List
+
+```tsx
+interface Kursus {
+    id: number;
+    judul: string;
+    status: "aktif" | "draft";
+}
+
+function KursusList({ kursus }: { kursus: Kursus[] }) {
+    // Jika data kosong
+    if (kursus.length === 0) {
+        return <p className="text-gray-500">Belum ada kursus.</p>;
+    }
+
+    return (
+        <ul className="space-y-2">
+            {kursus.map((k) => (
+                <li key={k.id} className="flex items-center gap-2">
+                    <span>{k.judul}</span>
+
+                    {/* Conditional rendering dengan && */}
+                    {k.status === "draft" && (
+                        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">
+                            Draft
+                        </span>
+                    )}
+
+                    {/* Ternary operator */}
+                    <span className={k.status === "aktif" ? "text-green-600" : "text-gray-400"}>
+                        ●
+                    </span>
+                </li>
+            ))}
+        </ul>
+    );
+}
+```
+
+### 4.6 useForm dari Inertia.js (Khusus Laravel)
+
+Di proyek Laravel + React, form biasanya menggunakan **`useForm` dari Inertia.js**, bukan fetch biasa.
+
+```tsx
+import { useForm } from "@inertiajs/react";
+
+interface RegisterForm {
+    name: string;
+    email: string;
+    password: string;
+    password_confirmation: string;
+}
+
+function RegisterPage() {
+    const { data, setData, post, processing, errors } = useForm<RegisterForm>({
+        name: "",
+        email: "",
+        password: "",
+        password_confirmation: "",
+    });
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        post("/register"); // kirim ke Laravel route /register
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+                <input
+                    type="text"
+                    value={data.name}
+                    onChange={(e) => setData("name", e.target.value)}
+                    placeholder="Nama lengkap"
+                />
+                {/* Tampilkan error dari Laravel validation */}
+                {errors.name && <p className="text-red-500 text-sm">{errors.name}</p>}
+            </div>
+
+            <div>
+                <input
+                    type="email"
+                    value={data.email}
+                    onChange={(e) => setData("email", e.target.value)}
+                    placeholder="Email"
+                />
+                {errors.email && <p className="text-red-500 text-sm">{errors.email}</p>}
+            </div>
+
+            <button type="submit" disabled={processing}>
+                {processing ? "Mendaftar..." : "Daftar"}
+            </button>
+        </form>
+    );
+}
+```
+
+---
+
+## Ringkasan
+
+| Topik | Konsep Kunci | Relevansinya di Laravel + React |
+|---|---|---|
+| **PHP Dasar** | Variabel, Array, Loop, Function | Dipakai di semua logika Controller, Model, Seeder |
+| **PHP OOP** | Class, Interface, Trait, Static | Dasar dari semua komponen Laravel |
+| **TypeScript** | Interface, Type, Generic | Typing props, data dari API, form |
+| **React** | Komponen, Props, useState, useEffect | Semua halaman & komponen UI |
+| **Inertia.js** | `useForm`, `usePage` | Penghubung antara Laravel & React |
+
+---
+
+> **Selanjutnya → Modul 01**: Persiapan Ekosistem, Fondasi & Test Framework.
 
 ---
 
