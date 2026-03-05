@@ -133,158 +133,6 @@ it('auto-generates certificate when all lessons completed', function () {
 
 ## 🟢 Fase GREEN: LessonController + Completion Logic
 
-### LessonController
-
-```bash
-php artisan make:controller LessonController
-```
-
-**`app/Http/Controllers/LessonController.php`:**
-
-```php
-<?php
-
-namespace App\Http\Controllers;
-
-use App\Http\Resources\CourseResource;
-use App\Http\Resources\LessonResource;
-use App\Models\Certificate;
-use App\Models\Course;
-use App\Models\Lesson;
-use App\Models\LessonCompletion;
-use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
-use Illuminate\Support\Str;
-use Inertia\Inertia;
-use Inertia\Response;
-
-class LessonController extends Controller
-{
-    /**
-     * Tampilkan halaman lesson.
-     * Hanya bisa diakses oleh enrolled student atau instructor.
-     */
-    public function show(Course $course, Lesson $lesson, Request $request): Response|RedirectResponse
-    {
-        $user = $request->user();
-
-        // --- Access Control ---
-        // Cek: apakah lesson ini milik course ini?
-        if ($lesson->course_id !== $course->id) {
-            abort(404);
-        }
-
-        // Cek: apakah user enrolled atau instructor?
-        $isInstructor = $user && $course->instructor_id === $user->id;
-        $isEnrolled = $user && $user->enrollments()
-            ->where('course_id', $course->id)->exists();
-
-        if (! $isInstructor && ! $isEnrolled) {
-            return redirect()
-                ->route('courses.show', $course)
-                ->with('error', 'You must enroll to access this lesson.');
-        }
-
-        // --- Data untuk Frontend ---
-        $course->load('lessons'); // Load semua lesson (untuk navigasi sidebar)
-
-        // Ambil daftar lesson yang sudah diselesaikan
-        $completedLessonIds = $user
-            ? $user->lessonCompletions()
-                ->whereIn('lesson_id', $course->lessons->pluck('id'))
-                ->pluck('lesson_id')
-                ->toArray()
-            : [];
-
-        // Hitung progress: persentase lesson yang sudah selesai
-        $totalLessons = $course->lessons->count();
-        $completedCount = count($completedLessonIds);
-        $progressPercent = $totalLessons > 0
-            ? round(($completedCount / $totalLessons) * 100)
-            : 0;
-
-        // Cek sertifikat
-        $certificate = $user
-            ? Certificate::where('user_id', $user->id)
-                ->where('course_id', $course->id)
-                ->first()
-            : null;
-
-        // Cari prev/next lesson untuk navigasi
-        $allLessons = $course->lessons->sortBy('id')->values();
-        $currentIndex = $allLessons->search(fn ($l) => $l->id === $lesson->id);
-        $prevLesson = $currentIndex > 0 ? $allLessons[$currentIndex - 1] : null;
-        $nextLesson = $currentIndex < $allLessons->count() - 1
-            ? $allLessons[$currentIndex + 1]
-            : null;
-
-        return Inertia::render('lesson/show', [
-            'course' => new CourseResource($course),
-            'lesson' => new LessonResource($lesson),
-            'lessons' => LessonResource::collection($course->lessons),
-            'completedLessonIds' => $completedLessonIds,
-            'progressPercent' => $progressPercent,
-            'certificate' => $certificate,
-            'prevLesson' => $prevLesson ? new LessonResource($prevLesson) : null,
-            'nextLesson' => $nextLesson ? new LessonResource($nextLesson) : null,
-        ]);
-    }
-
-    /**
-     * Tandai lesson sebagai selesai.
-     *
-     * firstOrCreate = idempotent: jika sudah ada, tidak buat duplikat.
-     * Setelah menandai, cek apakah SEMUA lesson sudah selesai → buat sertifikat.
-     */
-    public function complete(Course $course, Lesson $lesson, Request $request): RedirectResponse
-    {
-        $user = $request->user();
-
-        // Validasi: lesson harus milik course ini
-        if ($lesson->course_id !== $course->id) {
-            abort(404);
-        }
-
-        // Validasi: user harus enrolled
-        $isEnrolled = $user->enrollments()
-            ->where('course_id', $course->id)->exists();
-
-        if (! $isEnrolled) {
-            return back()->with('error', 'You must enroll first.');
-        }
-
-        // firstOrCreate = cari dulu, kalau belum ada baru buat
-        // Ini membuatnya IDEMPOTENT — aman dipanggil berkali-kali
-        LessonCompletion::firstOrCreate([
-            'user_id' => $user->id,
-            'lesson_id' => $lesson->id,
-        ]);
-
-        // --- Cek apakah semua lesson sudah selesai ---
-        $totalLessons = $course->lessons()->count();
-        $completedCount = $user->lessonCompletions()
-            ->whereIn('lesson_id', $course->lessons()->pluck('id'))
-            ->count();
-
-        if ($completedCount >= $totalLessons) {
-            // Semua selesai → buat sertifikat (jika belum ada)
-            Certificate::firstOrCreate(
-                [
-                    'user_id' => $user->id,
-                    'course_id' => $course->id,
-                ],
-                [
-                    // Generate nomor sertifikat unik: ACAD-XXXXXXXX
-                    'certificate_number' => 'ACAD-' . Str::upper(Str::random(8)),
-                ]
-            );
-        }
-
-        return back()->with('success', 'Lesson marked as complete!');
-    }
-}
-```
-
 ### Routes
 
 Tambahkan di `routes/web.php`:
@@ -308,10 +156,224 @@ Route::middleware('auth')->group(function () {
 });
 ```
 
+### LessonPolicy
+
+```bash
+php artisan make:policy LessonPolicy
+```
+
+```php
+<?php
+
+namespace App\Policies;
+
+use App\Models\Lesson;
+use App\Models\User;
+use Illuminate\Auth\Access\HandlesAuthorization;
+
+class LessonPolicy
+{
+    use HandlesAuthorization;
+
+    /**
+     * User boleh melihat lesson jika:
+     * - Dia instructor kursus tersebut, ATAU
+     * - Dia sudah enrolled di kursus tersebut
+     */
+    public function view(User $user, Lesson $lesson): bool
+    {
+        $course = $lesson->course;
+
+        if ($course->instructor_id === $user->id) {
+            return true;
+        }
+
+        return $user->enrollments()
+            ->whereCourseId($course->id)
+            ->exists();
+    }
+
+    /**
+     * User boleh menandai lesson selesai hanya jika enrolled
+     * (instructor tidak perlu menandai lesson sebagai selesai).
+     */
+    public function complete(User $user, Lesson $lesson): bool
+    {
+        return $user->enrollments()
+            ->whereCourseId($lesson->course_id)
+            ->exists();
+    }
+}
+```
+
+
+### LessonServices
+buat file **`app/Services/LessonService.php`:**
+
+```php
+<?php
+
+namespace App\Services;
+
+use App\Models\Certificate;
+use App\Models\Course;
+use App\Models\Lesson;
+use App\Models\LessonCompletion;
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+
+class LessonService
+{
+    /**
+     * Hitung persentase progress user di suatu kursus.
+     * Logika kalkulasi ini adalah business rule, bukan sekedar query.
+     */
+    public function getProgressPercent(Course $course, array $completedLessonIds): int
+    {
+        $totalLessons = $course->lessons->count();
+
+        if ($totalLessons === 0) {
+            return 0;
+        }
+
+        return (int) round((count($completedLessonIds) / $totalLessons) * 100);
+    }
+
+    /**
+     * Tandai lesson sebagai selesai (idempotent).
+     * Jika semua lesson selesai, buat sertifikat secara otomatis.
+     */
+    public function markComplete(Course $course, Lesson $lesson, User $user): void
+    {
+        DB::transaction(function () use ($course, $lesson, $user) {
+            LessonCompletion::firstOrCreate([
+                'user_id' => $user->id,
+                'lesson_id' => $lesson->id,
+            ]);
+
+            $this->issuesCertificateIfCompleted($course, $user);
+        });
+    }
+
+    /**
+     * Buat sertifikat jika semua lesson di kursus sudah diselesaikan.
+     * Dipisah menjadi method sendiri agar mudah di-test secara terisolasi.
+     */
+    private function issuesCertificateIfCompleted(Course $course, User $user): void
+    {
+        $lessonIds = $course->lessons()->pluck('id');
+        $totalLessons = $lessonIds->count();
+        $completedCount = $user->lessonCompletions()
+            ->whereIn('lesson_id', $lessonIds)
+            ->count();
+
+        if ($completedCount < $totalLessons) {
+            return;
+        }
+
+        Certificate::firstOrCreate(
+            [
+                'user_id' => $user->id,
+                'course_id' => $course->id,
+            ],
+            [
+                // Format: ACAD-XXXXXXXX
+                'certificate_number' => 'ACAD-'.Str::upper(Str::random(8)),
+            ]
+        );
+    }
+}
+```
+
+### LessonController
+
+```bash
+php artisan make:controller LessonController
+```
+
+**`app/Http/Controllers/LessonController.php`:**
+
+```php
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Resources\CourseResource;
+use App\Http\Resources\LessonResource;
+use App\Models\Course;
+use App\Models\Lesson;
+use App\Services\LessonService;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
+use Inertia\Inertia;
+use Inertia\Response;
+
+class LessonController extends Controller
+{
+    public function __construct(
+        private readonly LessonService $lessonService,
+    ) {}
+
+    /**
+     * Tampilkan halaman lesson.
+     * Hanya bisa diakses oleh enrolled student atau instructor.
+     *
+     * Otorisasi → LessonPolicy::view()
+     */
+    public function show(Course $course, Lesson $lesson, Request $request): Response|RedirectResponse
+    {
+        $user = $request->user();
+
+        // can() menggunakan LessonPolicy::view() di balik layar,
+        if (! $user->can('view', $lesson)) {
+            return redirect()
+                ->route('courses.show', $course)
+                ->with('error', 'You must enroll to access this lesson.');
+        }
+
+        //Load hanya jika belum diload
+        $course->loadMissing('lessons');
+        $lesson->loadComments();
+
+        $completedLessonIds = $user->completedLessonIdsForCourse($course);
+
+        return Inertia::render('lesson/show', [
+            'course' => new CourseResource($course),
+            'lesson' => new LessonResource($lesson),
+            'lessons' => LessonResource::collection($course->lessons),
+            'completedLessonIds' => $completedLessonIds,
+            'progressPercent' => $this->lessonService->getProgressPercent($course, $completedLessonIds),
+            'certificate' => $user->certificateFor($course),
+            'prevLesson' => ($prev = $lesson->previousLesson()) ? new LessonResource($prev) : null,
+            'nextLesson' => ($next = $lesson->nextLesson()) ? new LessonResource($next) : null,
+        ]);
+    }
+
+    /**
+     * Tandai lesson sebagai selesai.
+     *
+     * Otorisasi → LessonPolicy::complete()
+     * Logika    → LessonService::markComplete()
+     */
+    public function complete(Course $course, Lesson $lesson, Request $request): RedirectResponse
+    {
+        Gate::authorize('complete', $lesson);
+
+        $this->lessonService
+            ->markComplete($course, $lesson, $request->user());
+
+        return back()->with('success', 'Lesson marked as complete!');
+    }
+}
+
+```
+
+
 **Jalankan test:**
 
 ```bash
-php artisan wayfinder:generate
 php artisan test tests/Feature/LessonTest.php
 ```
 
@@ -613,19 +675,12 @@ export default function LessonShow({
 ## ✅ Checkpoint Modul 5
 
 ```bash
-# 1. Generate Wayfinder
-php artisan wayfinder:generate
-
-# 2. Semua test harus hijau
+# 1. Semua test harus hijau
 php artisan test
 # Expected: semua passed
 
-# 3. Re-seed
+# 2. Re-seed
 php artisan migrate:fresh --seed
-
-# 4. ESLint + TypeScript
-npx eslint resources/js/
-npx tsc --noEmit
 ```
 
 **Verifikasi visual:**
