@@ -119,6 +119,7 @@ Berdasarkan fitur di atas, kita membutuhkan 6 entitas (tabel):
         │                │ │ title            │
         │                │ │ video_url        │
         │                │ │ content          │
+        │                │ │ order            │
         │                │ │ timestamps       │
         │                │ └──────────────────┘
         │                │          │
@@ -141,6 +142,7 @@ Berdasarkan fitur di atas, kita membutuhkan 6 entitas (tabel):
                        └──▶│ course_id (FK)   │──── Courses.id
                            │ user_id (FK)     │──── Users.id
                            │ certificate_no   │
+                           │ issued_at        │
                            │ timestamps       │
                            │ unique(user,co.) │
                            └──────────────────┘
