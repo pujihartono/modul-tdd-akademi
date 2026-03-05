@@ -90,6 +90,148 @@ it('prevents non-enrolled user from commenting', function () {
 
 ## 🟢 Fase GREEN: CommentController + Event
 
+### Routes
+
+Tambahkan di `routes/web.php` (di dalam group `auth`):
+
+```php
+use App\Http\Controllers\CommentController;
+
+// Di dalam Route::middleware('auth')->group(function () { ... })
+Route::post('/courses/{course:slug}/lessons/{lesson}/comments',
+        [CommentController::class, 'store']
+    )->name('comments.store');
+```
+
+Tambahkan di `routes/channels.php`:
+
+```php
+Broadcast::channel('lesson.{lessonId}', function (User $user, int $lessonId) {
+    $lesson = Lesson::findOrFail($lessonId);
+
+    // Logika otorisasi: Izinkan jika instruktur atau murid yang terdaftar
+    $isInstructor = $lesson->course->instructor_id === $user->id;
+    $isEnrolled = $user->enrollments()->where('course_id', $lesson->course_id)->exists();
+
+    return $isInstructor || $isEnrolled;
+});
+```
+ini perlu dilakukan karena kita menggunakan private channel, jika menggunakan public channel maka tidak perlu ditambahkan
+
+### CommentService
+
+buat file **`app/Services/CommentService.php`:**
+
+```php
+<?php
+
+namespace App\Services;
+
+use App\Events\CommentPosted;
+use App\Models\Comment;
+use App\Models\Lesson;
+use Illuminate\Support\Facades\Log;
+
+class CommentService
+{
+    /**
+     * Simpan komentar baru pada lesson dan broadcast ke Reverb.
+     *
+     * Broadcast diletakkan di sini (bukan controller) agar:
+     * - Mudah di-test tanpa HTTP layer
+     * - Bisa dipanggil ulang dari tempat lain (misal: API controller)
+     */
+    public function store(Lesson $lesson, int $userId, string $body): Comment
+    {
+        $comment = $lesson->comments()->create([
+            'user_id' => $userId,
+            'body' => $body,
+        ]);
+
+        // Broadcast adalah operasi eksternal (Reverb/WebSocket) yang bisa gagal
+        // secara independen. Komentar yang sudah tersimpan di DB tidak boleh
+        // ikut gagal hanya karena Reverb down atau koneksi terputus.
+        try {
+            broadcast(new CommentPosted($comment));
+        } catch (\Throwable $e) {
+            Log::warning('Broadcast CommentPosted gagal', [
+                'comment_id' => $comment->id,
+                'lesson_id' => $lesson->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $comment;
+    }
+}
+
+```
+
+### StoreCommentRequest
+```bash
+php artisan make:request StoreCommentRequest
+```
+
+**`app/Http/Requests/CommentRequest.php`**
+```php
+<?php
+
+namespace App\Http\Requests;
+
+use App\Models\Course;
+use App\Models\User;
+use Illuminate\Contracts\Validation\ValidationRule;
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreCommentRequest extends FormRequest
+{
+    /**
+     * Determine if the user is authorized to make this request.
+     */
+    public function authorize(): bool
+    {
+        /** @var Course $course */
+        $course = $this->route('course');
+
+        /** @var User $user */
+        $user = $this->user();
+
+        if ($course->instructor_id === $user->id) {
+            return true;
+        }
+
+        return $user->enrollments()
+            ->whereCourseId($course->id)
+            ->exists();
+    }
+
+    /**
+     * Get the validation rules that apply to the request.
+     *
+     * @return array<string, ValidationRule|array<mixed>|string>
+     */
+    public function rules(): array
+    {
+        return [
+            'body' => ['required', 'string', 'max:1000'],
+        ];
+    }
+
+    /**
+     * Custom error messages (opsional).
+     *
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'body.required' => 'Komentar tidak boleh kosong.',
+            'body.max'      => 'Komentar maksimal 1000 karakter.',
+        ];
+    }
+}
+```
+
 ### CommentController
 
 ```bash
@@ -103,33 +245,24 @@ php artisan make:controller CommentController
 
 namespace App\Http\Controllers;
 
-use App\Events\CommentPosted;
+use App\Http\Requests\StoreCommentRequest;
 use App\Models\Course;
 use App\Models\Lesson;
-use Illuminate\Http\Request;
+use App\Services\CommentService;
 
 class CommentController extends Controller
 {
-    public function store(Request $request, Course $course, Lesson $lesson)
+    public function __construct(
+        private readonly CommentService $commentService,
+    ) {}
+
+    public function store(StoreCommentRequest $request, Course $course, Lesson $lesson)
     {
-        $validated = $request->validate([
-            'body' => 'required|string|max:1000',
-        ]);
-
-        // Cek otorisasi (pastikan user berhak komentar)
-        // Idealnya gunakan Policy, tapi ini logika inline untuk pragmatisme
-        $isInstructor = $course->instructor_id === $request->user()->id;
-        $isEnrolled = $request->user()->enrollments()->where('course_id', $course->id)->exists();
-
-        abort_if(! $isInstructor && ! $isEnrolled, 403, 'Unauthorized action.');
-
-        $comment = $lesson->comments()->create([
-            'user_id' => $request->user()->id,
-            'body' => $validated['body'],
-        ]);
-
-        // Trigger event ke Reverb
-        broadcast(new CommentPosted($comment));
+        $this->commentService->store(
+            $lesson,
+            $request->user()->id,
+            $request->validated('body'),
+        );
 
         // Return back jika lewat Inertia normal
         return back();
@@ -205,56 +338,6 @@ class CommentPosted implements ShouldBroadcastNow
         return 'comment.posted';
     }
 }
-```
-
-### Routes
-
-Tambahkan di `routes/web.php` (di dalam group `auth`):
-
-```php
-use App\Http\Controllers\CommentController;
-
-// Di dalam Route::middleware('auth')->group(function () { ... })
-Route::post('/courses/{course:slug}/lessons/{lesson}/comments',
-        [CommentController::class, 'store']
-    )->name('comments.store');
-```
-
-Tambahkan di `routes/channels.php`:
-
-```php
-Broadcast::channel('lesson.{lessonId}', function (User $user, int $lessonId) {
-    $lesson = Lesson::findOrFail($lessonId);
-
-    // Logika otorisasi: Izinkan jika instruktur atau murid yang terdaftar
-    $isInstructor = $lesson->course->instructor_id === $user->id;
-    $isEnrolled = $user->enrollments()->where('course_id', $lesson->course_id)->exists();
-
-    return $isInstructor || $isEnrolled;
-});
-```
-ini perlu dilakukan karena kita menggunakan private channel, jika menggunakan public channel maka tidak perlu ditambahkan
-
-
-### Update LessonController — Sertakan Comments
-
-Di `app/Http/Controllers/LessonController.php`, method `show()`, load comments agar data dapat terkirim ke frontend:
-
-```php
-// Di akhir method show(), sebelum return Inertia::render, tambahkan:
-
-$lesson->load(['comments' => function ($query) {
-    $query->oldest()->with('user:id,name');
-}]);
-
-```
-
-### Update LessonResource — Sertakan Comments
-
-Di `app/Http/Resources/LessonResource.php`
-
-```php
-'comments' => $this->whenLoaded('comments'),
 ```
 
 ### Setup Laravel Reverb (WebSocket Server)
@@ -384,7 +467,6 @@ npm run dev
 **Jalankan test:**
 
 ```bash
-php artisan wayfinder:generate
 php artisan test tests/Feature/CommentTest.php
 ```
 
@@ -974,19 +1056,13 @@ export default function LessonShow({
 ## ✅ Checkpoint Modul 6
 
 ```bash
-# 1. Generate Wayfinder
-php artisan wayfinder:generate
-
-# 2. Semua test harus hijau
+# 1. Semua test harus hijau
 php artisan test
 # Expected: SEMUA passed
 
-# 3. Re-seed
+# 2. Re-seed (Hanya saat pengembangan)
 php artisan migrate:fresh --seed
 
-# 4. ESLint + TypeScript
-npx eslint resources/js/
-npx tsc --noEmit
 ```
 
 **Verifikasi visual:**
