@@ -249,7 +249,7 @@ class CommentResource extends JsonResource
             'id' => $this->id,
             'body' => $this->body,
             'user' => new UserResource($this->whenLoaded('user')),
-            'created_at' => $this->created_at->diffForHumans(),
+            'created_at' => $this->created_at->toISOString(),
         ];
     }
 }
