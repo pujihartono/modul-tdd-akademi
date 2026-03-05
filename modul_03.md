@@ -108,6 +108,26 @@ it('shows not enrolled for guest', function () {
 
 ## 🟢 Fase GREEN: Controller, Routes, API Resources
 
+### Routes
+
+Buka `routes/web.php`. **Hapus route placeholder** dari Modul 1 dan ganti:
+
+```php
+use App\Http\Controllers\CourseController;
+
+// ❌ HAPUS route closure placeholder dari Modul 1:
+// Route::get('/courses', function () { ... })->name('courses.index');
+
+// ✅ GANTI dengan Controller routes:
+// Public = bisa diakses tanpa login
+Route::get('/courses', [CourseController::class, 'index'])
+    ->name('courses.index');
+
+// {course:slug} = route model binding via kolom 'slug' (bukan id)
+Route::get('/courses/{course:slug}', [CourseController::class, 'show'])
+    ->name('courses.show');
+```
+
 ### API Resources (Proteksi Data)
 
 API Resource mengontrol **field apa saja** yang dikirim ke frontend.
@@ -116,6 +136,7 @@ API Resource mengontrol **field apa saja** yang dikirim ke frontend.
 php artisan make:resource UserResource
 php artisan make:resource CourseResource
 php artisan make:resource LessonResource
+php artisan make:resource CommentResource
 ```
 
 **`app/Http/Resources/UserResource.php`:**
@@ -194,9 +215,124 @@ class LessonResource extends JsonResource
             'title' => $this->title,
             'video_url' => $this->video_url,
             'content' => $this->content,
+            'order' => $this->order,
+
+            'comments' => CommentResource::collection(
+                $this->whenLoaded('comments')
+            ),
         ];
     }
 }
+```
+
+
+**`app/Http/Resources/CommentResource.php`:**
+
+```php
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class CommentResource extends JsonResource
+{
+    /**
+     * Transform the resource into an array.
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(Request $request): array
+    {
+        return [
+            'id' => $this->id,
+            'body' => $this->body,
+            'user' => new UserResource($this->whenLoaded('user')),
+            'created_at' => $this->created_at->diffForHumans(),
+        ];
+    }
+}
+```
+
+### CourseService
+Buat file **`app/Services/CourseService.php`:**
+
+```php
+<?php
+
+namespace App\Services;
+
+use App\Models\Course;
+use App\Models\User;
+
+class CourseService
+{
+    /**
+     * Cek apakah user sudah enrolled di kursus ini.
+     *
+     * Business rule:
+     * - Guest              → tidak enrolled
+     * - Instructor kursus  → otomatis dianggap enrolled (akses penuh)
+     * - User biasa         → cek tabel enrollments
+     */
+    public function isEnrolled(Course $course, ?User $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+
+        if ($course->instructor_id === $user->id) {
+            return true;
+        }
+
+        return $user->enrollments()
+            ->whereCourseId($course->id)
+            ->exists();
+    }
+}
+```
+### CoursePolicy
+Untuk membatasi hak akses
+```bash
+php artisan make:policy CoursePolicy
+```
+
+```php
+<?php
+
+namespace App\Policies;
+
+use App\Models\Course;
+use App\Models\User;
+use Illuminate\Auth\Access\HandlesAuthorization;
+
+class CoursePolicy
+{
+    use HandlesAuthorization;
+
+    /**
+     * Siapa saja boleh melihat katalog kursus (termasuk guest).
+     */
+    public function viewAny(?User $user): bool
+    {
+        return true;
+    }
+
+    /**
+     * Kursus yang sudah dipublish boleh dilihat siapa saja.
+     * Kursus draft hanya bisa dilihat oleh instructor pemiliknya.
+     */
+    public function view(?User $user, Course $course): bool
+    {
+        if ($course->isPublished()) {
+            return true;
+        }
+
+        return $user?->id === $course->instructor_id;
+    }
+}
+
 ```
 
 ### CourseController
@@ -214,30 +350,30 @@ namespace App\Http\Controllers;
 
 use App\Http\Resources\CourseResource;
 use App\Http\Resources\LessonResource;
-use App\Models\Certificate;
 use App\Models\Course;
+use App\Services\CourseService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class CourseController extends Controller
 {
+    public function __construct(
+        private readonly CourseService $courseService,
+    ) {}
+
     /**
      * Katalog: daftar kursus yang sudah dipublish.
      * Bisa diakses siapa saja (guest maupun logged-in user).
      */
     public function index(): Response
     {
-        $courses = Course::query()
-            ->with('instructor')          // Eager load relasi instructor
-            ->withCount('lessons')         // Hitung jumlah lesson per kursus
-            ->whereNotNull('published_at') // Hanya yang sudah published
-            ->latest()                     // Terbaru dulu
-            ->paginate(9);                 // 9 per halaman (grid 3x3)
+        Gate::authorize('viewAny', Course::class);
 
         return Inertia::render('course/index', [
             // CourseResource::collection() memfilter data via Resource
-            'courses' => CourseResource::collection($courses),
+            'courses' => CourseResource::collection(Course::getPublished()),
         ]);
     }
 
@@ -247,31 +383,16 @@ class CourseController extends Controller
      */
     public function show(Course $course, Request $request): Response
     {
+        Gate::authorize('view', $course);
         // Load relasi yang dibutuhkan (eager loading)
-        $course->load('instructor', 'lessons');
+        $course->loadMissing('instructor', 'lessons');
 
         $user = $request->user(); // null jika guest
 
         // Cek apakah user saat ini sudah enrolled
-        $isEnrolled = $user
-            ? ($course->instructor_id === $user->id  // Instructor = otomatis akses
-                || $user->enrollments()->where('course_id', $course->id)->exists())
-            : false;
-
-        // Progress: lesson mana saja yang sudah selesai
-        $completedLessonIds = ($user && $isEnrolled)
-            ? $user->lessonCompletions()
-                ->whereIn('lesson_id', $course->lessons->pluck('id'))
-                ->pluck('lesson_id')
-                ->toArray()
-            : [];
-
-        // Sertifikat (jika ada)
-        $certificate = $user
-            ? Certificate::where('user_id', $user->id)
-                ->where('course_id', $course->id)
-                ->first()
-            : null;
+        $isEnrolled = $this->courseService->isEnrolled($course, $user);
+        $completedLessonIds = $isEnrolled ? $user->completedLessonIdsForCourse($course) : [];
+        $certificate = $user?->certificateFor($course);
 
         return Inertia::render('course/show', [
             'course' => new CourseResource($course),
@@ -282,26 +403,6 @@ class CourseController extends Controller
         ]);
     }
 }
-```
-
-### Routes
-
-Buka `routes/web.php`. **Hapus route placeholder** dari Modul 1 dan ganti:
-
-```php
-use App\Http\Controllers\CourseController;
-
-// ❌ HAPUS route closure placeholder dari Modul 1:
-// Route::get('/courses', function () { ... })->name('courses.index');
-
-// ✅ GANTI dengan Controller routes:
-// Public = bisa diakses tanpa login
-Route::get('/courses', [CourseController::class, 'index'])
-    ->name('courses.index');
-
-// {course:slug} = route model binding via kolom 'slug' (bukan id)
-Route::get('/courses/{course:slug}', [CourseController::class, 'show'])
-    ->name('courses.show');
 ```
 
 **Jalankan Wayfinder + test:**
@@ -406,6 +507,7 @@ export interface PaginatedData<T> {
 # Komponen yang belum ada di starter kit
 npx shadcn@latest add card badge separator
 ```
+Biasanya sudah terinstall (optional)
 
 ### 3. Halaman Katalog
 
@@ -875,11 +977,11 @@ ubah menjadi
 php artisan test
 # Expected: semua test passed
 
-# 2. Generate Wayfinder
+# 2. Generate Wayfinder (optional)
 php artisan wayfinder:generate
 # Expected: file-file di resources/js/actions/ ter-generate
 
-# 3. ESLint + TypeScript check
+# 3. ESLint + TypeScript check (optional)
 npx eslint resources/js/pages/course/
 npx tsc --noEmit
 # Expected: tidak ada error
