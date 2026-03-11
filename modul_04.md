@@ -577,22 +577,12 @@ class EnrollUserInCourseService
                 throw new Exception('Anda sudah terdaftar di kursus ini.');
             }
 
-            // === OPERASI DATABASE ===
-
-            // Buat enrollment
-            $enrollment = Enrollment::create([
+            // Create enrollment
+            return Enrollment::create([
                 'user_id' => $user->id,
                 'course_id' => $course->id,
                 'enrolled_at' => now(),
             ]);
-
-            // (Opsional) Update counter kursus
-            $course->increment('enrollment_count');
-
-            // (Opsional) Catat log aktivitas
-            // ActivityLog::create([...]);
-
-            return $enrollment;
         });
     }
 }
