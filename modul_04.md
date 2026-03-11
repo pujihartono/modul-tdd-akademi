@@ -607,7 +607,7 @@ use Exception;
 
 class EnrollmentController extends Controller
 {
-    public function enroll(Course $course, EnrollUserInCourseService $enrollUserInCourseService)
+    public function store(Course $course, EnrollUserInCourseService $enrollUserInCourseService)
     {
         try {
             $enrollUserInCourseService->execute(auth()->user(), $course);
