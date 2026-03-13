@@ -90,6 +90,123 @@ it('prevents non-enrolled user from commenting', function () {
 
 ## 🟢 Fase GREEN: CommentController + Event
 
+
+
+### Setup Laravel Reverb (WebSocket Server)
+
+```bash
+# Instal Reverb
+php artisan install:broadcasting
+```
+
+Pilih **Reverb** saat diminta. Ini akan:
+- Menambahkan konfigurasi di `.env` dan `config/broadcasting.php`
+- Menambahkan routes `routes/channels.php`
+- Menginstal `laravel-echo` dan `pusher-js` di frontend
+
+Update `.env`:
+
+```env
+BROADCAST_CONNECTION=reverb # ganti dari log ke reverb (sudah otomatis jika menjalankan commands sebelumnya)
+
+REVERB_APP_ID=339796
+REVERB_APP_KEY=iuy4n4bhijbnhjzw3dvj
+REVERB_APP_SECRET=deivni6abklo6q8ygzut
+REVERB_HOST="0.0.0.0"
+REVERB_PORT=8080
+REVERB_SCHEME=https
+
+# disesuaikan lokasi sertifikat
+REVERB_TLS_CERT="/Users/hartono/Library/Application Support/Herd/config/valet/Certificates/akademi.test.crt"
+REVERB_TLS_KEY="/Users/hartono/Library/Application Support/Herd/config/valet/Certificates/akademi.test.key"
+
+VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
+VITE_REVERB_HOST="akademi.test" # alamat disesuaikan dengan herd
+VITE_REVERB_PORT=8080
+VITE_REVERB_SCHEME=https
+```
+
+### Ubah konfig broadcasting `config/broadcasting.php`
+
+```php
+'client_options' => [
+    // Agar tidak error ketika menggunakan Herd
+    'verify' => false,
+],
+```
+
+### ubah `resources/js/app.tsx`
+
+```tsx
+import { createInertiaApp } from '@inertiajs/react';
+// 1. Impor Pusher dan Echo
+import Echo from 'laravel-echo';
+import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
+import Pusher from 'pusher-js';
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import '../css/app.css';
+import { initializeTheme } from '@/hooks/use-appearance';
+
+// 2. Lekatkan Pusher ke window agar dikenali secara internal oleh Echo
+window.Pusher = Pusher;
+
+// 3. Inisialisasi dan lekatkan Echo ke window
+window.Echo = new Echo({
+    broadcaster: 'reverb',
+    key: import.meta.env.VITE_REVERB_APP_KEY,
+    wsHost: import.meta.env.VITE_REVERB_HOST,
+    wsPort: import.meta.env.VITE_REVERB_PORT ?? 80,
+    wssPort: import.meta.env.VITE_REVERB_PORT ?? 443,
+    forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
+    enabledTransports: ['ws', 'wss'],
+});
+
+const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+
+createInertiaApp({
+    title: (title) => (title ? `${title} - ${appName}` : appName),
+    resolve: (name) =>
+        resolvePageComponent(
+            `./pages/${name}.tsx`,
+            import.meta.glob('./pages/**/*.tsx'),
+        ),
+    setup({ el, App, props }) {
+        const root = createRoot(el);
+
+        root.render(
+            <StrictMode>
+                <App {...props} />
+            </StrictMode>,
+        );
+    },
+    progress: {
+        color: '#4B5563',
+    },
+});
+
+// This will set light / dark mode on load...
+initializeTheme();
+
+```
+
+### edit file `resources/js/types/vite-env.d.ts` menjadi
+
+```ts
+/// <reference types="vite/client" />
+import type { AxiosInstance } from 'axios';
+import type Echo from 'laravel-echo';
+import type Pusher from 'pusher-js';
+
+declare global {
+    interface Window {
+        axios: AxiosInstance;
+        Pusher: typeof Pusher;
+        Echo: Echo;
+    }
+}
+```
+
 ### Routes
 
 Tambahkan di `routes/web.php` (di dalam group `auth`):
@@ -103,9 +220,19 @@ Route::post('/courses/{course:slug}/lessons/{lesson}/comments',
     )->name('comments.store');
 ```
 
-Tambahkan di `routes/channels.php`:
+Ganti `routes/channels.php`:
 
 ```php
+<?php
+
+use App\Models\Lesson;
+use App\Models\User;
+use Illuminate\Support\Facades\Broadcast;
+
+Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
+    return (int) $user->id === (int) $id;
+});
+
 Broadcast::channel('lesson.{lessonId}', function (User $user, int $lessonId) {
     $lesson = Lesson::findOrFail($lessonId);
 
@@ -115,8 +242,80 @@ Broadcast::channel('lesson.{lessonId}', function (User $user, int $lessonId) {
 
     return $isInstructor || $isEnrolled;
 });
+
 ```
 ini perlu dilakukan karena kita menggunakan private channel, jika menggunakan public channel maka tidak perlu ditambahkan
+
+
+### Event CommentPosted
+
+```bash
+php artisan make:event CommentPosted
+```
+
+**`app/Events/CommentPosted.php`:**
+
+```php
+<?php
+
+namespace App\Events;
+
+use App\Models\Comment;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+
+// Menggunakan ShouldBroadcastNow agar real-time instan tanpa antrean worker tambahan,
+// sangat efisien untuk arsitektur server tunggal sederhana.
+class CommentPosted implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    /**
+     * Data yang akan dikirim ke frontend.
+     */
+    public array $commentData;
+
+    public function __construct(public Comment $comment)
+    {
+        // Eager load user agar frontend bisa menampilkan nama/avatar
+        $this->comment->load('user');
+
+        // Format data yang dikirim agar aman dan bersih
+        $this->commentData = [
+            'id' => $this->comment->id,
+            'body' => $this->comment->body,
+            'lesson_id' => $this->comment->lesson_id,
+            'user' => [
+                'id' => $this->comment->user->id,
+                'name' => $this->comment->user->name,
+            ],
+            'created_at' => $this->comment->created_at->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Tentukan channel broadcast.
+     * Gunakan PrivateChannel agar hanya user yang berhak (enrolled/instructor) yang bisa listen.
+     */
+    public function broadcastOn(): array
+    {
+        return [
+            new PrivateChannel('lesson.'.$this->comment->lesson_id),
+        ];
+    }
+
+    /**
+     * Nama event yang didengarkan oleh frontend.
+     */
+    public function broadcastAs(): string
+    {
+        return 'comment.posted';
+    }
+}
+```
 
 ### CommentService
 
@@ -226,7 +425,7 @@ class StoreCommentRequest extends FormRequest
     {
         return [
             'body.required' => 'Komentar tidak boleh kosong.',
-            'body.max'      => 'Komentar maksimal 1000 karakter.',
+            'body.max' => 'Komentar maksimal 1000 karakter.',
         ];
     }
 }
@@ -270,188 +469,6 @@ class CommentController extends Controller
 }
 ```
 
-### Event CommentPosted
-
-```bash
-php artisan make:event CommentPosted
-```
-
-**`app/Events/CommentPosted.php`:**
-
-```php
-<?php
-
-namespace App\Events;
-
-use App\Models\Comment;
-use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
-use Illuminate\Foundation\Events\Dispatchable;
-use Illuminate\Queue\SerializesModels;
-
-// Menggunakan ShouldBroadcastNow agar real-time instan tanpa antrean worker tambahan,
-// sangat efisien untuk arsitektur server tunggal sederhana.
-class CommentPosted implements ShouldBroadcastNow
-{
-    use Dispatchable, InteractsWithSockets, SerializesModels;
-
-    /**
-     * Data yang akan dikirim ke frontend.
-     */
-    public array $commentData;
-
-    public function __construct(public Comment $comment)
-    {
-        // Eager load user agar frontend bisa menampilkan nama/avatar
-        $this->comment->load('user');
-
-        // Format data yang dikirim agar aman dan bersih
-        $this->commentData = [
-            'id' => $this->comment->id,
-            'body' => $this->comment->body,
-            'lesson_id' => $this->comment->lesson_id,
-            'user' => [
-                'id' => $this->comment->user->id,
-                'name' => $this->comment->user->name,
-            ],
-            'created_at' => $this->comment->created_at->toIso8601String(),
-        ];
-    }
-
-    /**
-     * Tentukan channel broadcast.
-     * Gunakan PrivateChannel agar hanya user yang berhak (enrolled/instructor) yang bisa listen.
-     */
-    public function broadcastOn(): array
-    {
-        return [
-            new PrivateChannel('lesson.'.$this->comment->lesson_id),
-        ];
-    }
-
-    /**
-     * Nama event yang didengarkan oleh frontend.
-     */
-    public function broadcastAs(): string
-    {
-        return 'comment.posted';
-    }
-}
-```
-
-### Setup Laravel Reverb (WebSocket Server)
-
-```bash
-# Instal Reverb
-php artisan install:broadcasting
-```
-
-Pilih **Reverb** saat diminta. Ini akan:
-- Menambahkan konfigurasi di `.env`
-- Menginstal `laravel-echo` dan `pusher-js` di frontend
-
-Update `.env`:
-
-```env
-BROADCAST_CONNECTION=reverb
-
-REVERB_APP_ID=akademi
-REVERB_APP_KEY=akademi-key
-REVERB_HOST="0.0.0.0"
-REVERB_PORT=8080
-REVERB_SCHEME=https
-
-// Disesuaikan dengan lokasi masing-masing
-REVERB_TLS_CERT="/Users/hartono/Library/Application Support/Herd/config/valet/Certificates/akademi.test.crt"
-REVERB_TLS_KEY="/Users/hartono/Library/Application Support/Herd/config/valet/Certificates/akademi.test.key"
-
-VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
-VITE_REVERB_HOST="akademiuji.test"
-VITE_REVERB_PORT=8080
-VITE_REVERB_SCHEME=https
-```
-
-### Ubah konfig broadcasting `config/broadcasting.php`
-
-```php
-'client_options' => [
-    // Agar tidak error ketika menggunakan Herd
-    'verify' => false,
-],
-```
-
-### ubah app.tsx
-
-```tsx
-import { createInertiaApp } from '@inertiajs/react';
-// 1. Impor Pusher dan Echo
-import Echo from 'laravel-echo';
-import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
-import Pusher from 'pusher-js';
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import '../css/app.css';
-import { initializeTheme } from '@/hooks/use-appearance';
-
-// 2. Lekatkan Pusher ke window agar dikenali secara internal oleh Echo
-window.Pusher = Pusher;
-
-// 3. Inisialisasi dan lekatkan Echo ke window
-window.Echo = new Echo({
-    broadcaster: 'reverb',
-    key: import.meta.env.VITE_REVERB_APP_KEY,
-    wsHost: import.meta.env.VITE_REVERB_HOST,
-    wsPort: import.meta.env.VITE_REVERB_PORT ?? 80,
-    wssPort: import.meta.env.VITE_REVERB_PORT ?? 443,
-    forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
-    enabledTransports: ['ws', 'wss'],
-});
-
-const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
-
-createInertiaApp({
-    title: (title) => (title ? `${title} - ${appName}` : appName),
-    resolve: (name) =>
-        resolvePageComponent(
-            `./pages/${name}.tsx`,
-            import.meta.glob('./pages/**/*.tsx'),
-        ),
-    setup({ el, App, props }) {
-        const root = createRoot(el);
-
-        root.render(
-            <StrictMode>
-                <App {...props} />
-            </StrictMode>,
-        );
-    },
-    progress: {
-        color: '#4B5563',
-    },
-});
-
-// This will set light / dark mode on load...
-initializeTheme();
-
-```
-
-### edit file vite-env.d.ts menjadi
-
-```ts
-/// <reference types="vite/client" />
-import type { AxiosInstance } from 'axios';
-import type Echo from 'laravel-echo';
-import type Pusher from 'pusher-js';
-
-declare global {
-    interface Window {
-        axios: AxiosInstance;
-        Pusher: typeof Pusher;
-        Echo: Echo;
-    }
-}
-```
 
 **Pastikan jalankan Reverb dan NPM saat uji coba**
 
@@ -477,152 +494,6 @@ php artisan test tests/Feature/CommentTest.php
 
 ## 🔵 Fase REFACTOR: Komponen Komentar + Real-time
 
-### Komponen LessonComments
-
-Buat `resources/js/components/lesson-comments.tsx`:
-
-```tsx
-/**
- * LessonComments — kolom diskusi real-time di halaman lesson.
- */
-
-import { useForm } from '@inertiajs/react';
-import { MessageCircle, Send } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-
-// ─── Deklarasi global agar TypeScript tidak error "Echo not defined" ──────────
-declare global {
-    interface Window {
-        Echo?: {
-            channel: (name: string) => {
-                listen: (event: string, callback: (data: unknown) => void) => void;
-            };
-            leaveChannel: (name: string) => void;
-        };
-    }
-}
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface CommentData {
-    id: number;
-    body: string;
-    user: { id: number; name: string };
-    created_at: string;
-}
-
-interface Props {
-    lessonId: number;
-    courseSlug: string;
-    initialComments: CommentData[];
-}
-
-export default function LessonComments({
-    lessonId,
-    courseSlug,
-    initialComments,
-}: Props) {
-    const [comments, setComments] = useState<CommentData[]>(initialComments);
-
-    const { data, setData, post, processing, reset, errors } = useForm({
-        body: '',
-    });
-
-    useEffect(() => {
-        // ✅ Guard: Echo belum tentu di-load (mis. user belum login / Pusher belum init)
-        if (!window.Echo) {
-            console.warn('Laravel Echo belum tersedia. Real-time dinonaktifkan.');
-            return;
-        }
-
-        const channelName = `lesson.${lessonId}`;
-        const channel = window.Echo.channel(channelName);
-
-        channel.listen('CommentPosted', (event: unknown) => {
-            // ✅ Cast setelah validasi tipe
-            const comment = event as CommentData;
-            setComments((prev) => [comment, ...prev]);
-        });
-
-        return () => {
-            window.Echo?.leaveChannel(channelName);
-        };
-    }, [lessonId]);
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-
-        post(`/courses/${courseSlug}/lessons/${lessonId}/comments`, {
-            preserveScroll: true,
-            onSuccess: () => reset(),
-        });
-    };
-
-    return (
-        <Card className="w-full">
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                    <MessageCircle className="h-5 w-5" />
-                    Discussion ({comments.length})
-                </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                {/* === Form Komentar === */}
-                <form onSubmit={handleSubmit} className="space-y-3">
-                    <textarea
-                        value={data.body}
-                        onChange={(e) => setData('body', e.target.value)}
-                        placeholder="Write a comment..."
-                        className="w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                        rows={3}
-                    />
-                    {errors.body && (
-                        <p className="text-sm text-red-500">{errors.body}</p>
-                    )}
-                    <div className="flex justify-end">
-                        <Button
-                            type="submit"
-                            size="sm"
-                            disabled={processing || !data.body.trim()}
-                            className="gap-1.5"
-                        >
-                            <Send className="h-3.5 w-3.5" />
-                            {processing ? 'Posting...' : 'Post Comment'}
-                        </Button>
-                    </div>
-                </form>
-
-                {/* === Daftar Komentar === */}
-                {comments.length === 0 ? (
-                    <p className="py-4 text-center text-sm text-muted-foreground">
-                        No comments yet. Be the first to share your thoughts!
-                    </p>
-                ) : (
-                    <div className="max-h-96 space-y-3 overflow-y-auto">
-                        {comments.map((comment) => (
-                            <div
-                                key={comment.id}
-                                className="rounded-lg bg-accent/50 p-3"
-                            >
-                                <div className="mb-1 flex items-center justify-between">
-                                    <span className="text-sm font-semibold">
-                                        {comment.user.name}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                        {comment.created_at}
-                                    </span>
-                                </div>
-                                <p className="text-sm">{comment.body}</p>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </CardContent>
-        </Card>
-    );
-}
-```
 
 ### Perbaiki Halaman Lesson
 
